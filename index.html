@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flexibler Schichtplan</title>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+
+<style>
+
+body {
+  font-family: Arial, sans-serif;
+  margin: 15px;
+}
+
+h1 {
+  margin-bottom: 5px;
+}
+
+#adminControls {
+  position: fixed;
+  top: 10px;
+  right: 10px;
+  z-index: 9999;
+}
+
+#adminControls button {
+  padding: 4px 8px;
+  font-size: 12px;
+  opacity: 0.5;
+}
+
+#adminControls button:hover {
+  opacity: 1;
+}
+
+#planControls {
+  position: fixed;
+  top: 45px;
+  right: 10px;
+  z-index: 9999;
+}
+
+#editModeBtn {
+  padding: 4px 8px;
+  font-size: 14px;
+  opacity: 0.5;
+}
+
+#editModeBtn:hover {
+  opacity: 1;
+}
+
+#printControls {
+  position: fixed;
+  top: 80px;
+  right: 10px;
+  z-index: 9999;
+}
+
+#printControls button {
+  padding: 4px 8px;
+  opacity: 0.5;
+}
+
+#printControls button:hover {
+  opacity: 1;
+}
+
+#adminPanel {
+  display: none;
+  border: 2px solid #999;
+  padding: 15px;
+  margin-bottom: 20px;
+  background: #f5f5f5;
+}
+
+input, button {
+  margin: 5px;
+  padding: 6px;
+}
+
+button {
+  cursor: pointer;
+}
+
+.dayBlock {
+  border: 1px solid #ccc;
+  padding: 10px;
+  margin-bottom: 20px;
+  background: #fafafa;
+}
+
+.tasksContainer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px;
+}
+
+.taskRow {
+  border: 1px solid #ccc;
+  padding: 10px;
+  background: white;
+  min-width: 260px;
+  flex: 1;
+}
+
+.slotRow {
+  margin-left: 10px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+th, td {
+  border: 1px solid #999;
+  padding: 6px;
+  text-align: center;
+}
+
+th {
+  background: #eee;
+}
+
+.planInput {
+  width: 90%;
+}
+
+@media (max-width: 700px) {
+
+  table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  .tasksContainer {
+    flex-direction: column;
+  }
+
+}
+
+@media print {
+
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+
+  body {
+    margin: 0;
+    font-size: 11px;
+  }
+
+  #adminControls,
+  #planControls,
+  #printControls,
+  #adminPanel {
+    display: none !important;
+  }
+
+  h2 {
+    page-break-after: avoid;
+    break-after: avoid;
+    margin-bottom: 5px;
+  }
+
+  table {
+    width: 100%;
+    page-break-before: avoid;
+    break-before: avoid;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr {
+    page-break-inside: avoid;
+  }
+
+  .planInput {
+    border: none;
+    background: transparent !important;
+    color: black;
+    font-size: 11px;
+  }
+
+}
+
+</style>
+</head>
+
+<body>
+
+<h1 id="title">Schichtplan</h1>
+<div id="subtitle"></div>
+
+<div id="adminControls">
+  <button type="button" id="adminBtn">⚙</button>
+  <button type="button" id="closeAdminBtn">✕</button>
+</div>
+
+<div id="planControls">
+  <button id="editModeBtn">🔒</button>
+</div>
+
+<div id="printControls">
+  <button onclick="window.print()">🖨</button>
+</div>
+
+<div id="adminPanel">
+
+<h2>Allgemein</h2>
+
+<input id="orgName" placeholder="Verein">
+<input id="eventDetails" placeholder="Veranstaltung">
+
+<button onclick="saveConfig()">Speichern</button>
+
+<hr>
+
+<h2>Tag hinzufügen</h2>
+
+<input id="dayName" placeholder="Tag">
+<input id="dayDate" placeholder="Datum">
+<input id="dayTimes" placeholder="Zeiten mit Komma trennen">
+
+<button onclick="addDay()">Tag hinzufügen</button>
+
+<hr>
+
+<div id="dayList"></div>
+
+<button onclick="resetPlan()">Gesamten Plan löschen</button>
+
+</div>
+
+<div id="planContainer"></div>
+
+<script>
+
+const firebaseConfig = {
+
+  apiKey: "AIzaSyDgPxVHvO7wNYWF5RDfLK8uJ7KWxKyocrU",
+  authDomain: "schichtplan-feuerwehrfest.firebaseapp.com",
+  databaseURL: "https://schichtplan-feuerwehrfest-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "schichtplan-feuerwehrfest",
+  storageBucket: "schichtplan-feuerwehrfest.firebasestorage.app",
+  messagingSenderId: "811843189467",
+  appId: "1:811843189467:web:0f49ab8897395f805baafe"
+
+};
+
+firebase.initializeApp(firebaseConfig);
+
+const db = firebase.database();
+
+
+const CHANGE_PASSWORD = "ändern";
+
+let editMode = false;
+
+let settings = {
+  days: {}
+};
+
+function safeId(text) {
+  return text.replace(/[^a-zA-Z0-9]/g, "_");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  document.getElementById("adminBtn")
+  .addEventListener("click", async () => {
+
+    if (firebase.auth().currentUser) {
+
+      document.getElementById("adminPanel").style.display = "block";
+
+      return;
+
+    }
+
+    const email = prompt("Admin E-Mail:");
+    const password = prompt("Passwort:");
+
+    try {
+
+      await firebase.auth()
+        .signInWithEmailAndPassword(email, password);
+
+      document.getElementById("adminPanel").style.display = "block";
+
+    } catch (e) {
+
+      alert("Login fehlgeschlagen");
+
+      console.error(e);
+
+    }
+
+});
+
+  document.getElementById("closeAdminBtn")
+  .addEventListener("click", async () => {
+
+    document.getElementById("adminPanel").style.display = "none";
+
+    await firebase.auth().signOut();
+
+});
+
+  document.getElementById("editModeBtn")
+    .addEventListener("click", () => {
+
+      if (!editMode) {
+
+        const pw = prompt("Änderungs Passwort:");
+
+        if (pw !== CHANGE_PASSWORD) {
+          alert("Falsches Passwort");
+          return;
+        }
+
+        editMode = true;
+
+        document.getElementById("editModeBtn").textContent = "🔓";
+
+      } else {
+
+        editMode = false;
+
+        document.getElementById("editModeBtn").textContent = "🔒";
+
+      }
+
+      renderPlan();
+
+    });
+
+});
+
+function saveSettings() {
+  db.ref("settings").set(settings);
+}
+
+function saveConfig() {
+
+  db.ref("config").set({
+    orgName: document.getElementById("orgName").value,
+    details: document.getElementById("eventDetails").value
+  });
+
+}
+
+function addDay() {
+
+  const name =
+    document.getElementById("dayName").value.trim();
+
+  const date =
+    document.getElementById("dayDate").value.trim();
+
+  const times =
+    document.getElementById("dayTimes").value
+      .split(",")
+      .map(t => t.trim())
+      .filter(t => t);
+
+  if (!name) return;
+
+  settings.days[name] = {
+    date,
+    times,
+    tasks: []
+  };
+
+  saveSettings();
+
+}
+
+function deleteDay(day) {
+
+  delete settings.days[day];
+
+  saveSettings();
+
+}
+
+function updateDay(day) {
+
+  settings.days[day].date =
+    document.getElementById(`daydate_${safeId(day)}`).value;
+
+  settings.days[day].times =
+    document.getElementById(`daytimes_${safeId(day)}`).value
+      .split(",")
+      .map(t => t.trim())
+      .filter(t => t);
+
+  saveSettings();
+
+}
+
+function addTaskToDay(day) {
+
+  const dayId = safeId(day);
+
+  const name =
+    document.getElementById(`taskname_new_${dayId}`).value;
+
+  const color =
+    document.getElementById(`taskcolor_new_${dayId}`).value;
+
+  if (!name) return;
+
+  const slots = {};
+
+  settings.days[day].times.forEach(time => {
+    slots[time] = 1;
+  });
+
+  settings.days[day].tasks.push({
+    name,
+    color,
+    slots
+  });
+
+  saveSettings();
+
+}
+
+function updateTask(day, index) {
+
+  const dayId = safeId(day);
+
+  const task =
+    settings.days[day].tasks[index];
+
+  task.name =
+    document.getElementById(
+      `taskname_${dayId}_${index}`
+    ).value;
+
+  task.color =
+    document.getElementById(
+      `taskcolor_${dayId}_${index}`
+    ).value;
+
+  Object.keys(task.slots).forEach(time => {
+
+    task.slots[time] =
+      parseInt(
+        document.getElementById(
+          `slot_${dayId}_${index}_${safeId(time)}`
+        ).value
+      ) || 0;
+
+  });
+
+  saveSettings();
+
+}
+
+function deleteTask(day, index) {
+
+  settings.days[day].tasks.splice(index, 1);
+
+  saveSettings();
+
+}
+
+function renderAdminLists() {
+
+  const dayList =
+    document.getElementById("dayList");
+
+  dayList.innerHTML = "";
+
+  Object.entries(settings.days).forEach(([day, info]) => {
+
+    const dayId = safeId(day);
+
+    const div = document.createElement("div");
+
+    div.className = "dayBlock";
+
+    let html = `
+
+      <h3>${day}</h3>
+
+      <input
+        value="${info.date}"
+        id="daydate_${dayId}"
+      >
+
+      <input
+        value="${info.times.join(",")}"
+        id="daytimes_${dayId}"
+      >
+
+      <button onclick="updateDay('${day}')">
+        Speichern
+      </button>
+
+      <button onclick="deleteDay('${day}')">
+        Löschen
+      </button>
+
+      <hr>
+
+      <h4>Stationen</h4>
+
+      <div class="tasksContainer">
+
+    `;
+
+    info.tasks.forEach((task, index) => {
+
+      html += `
+
+        <div class="taskRow">
+
+          <strong>${task.name}</strong>
+
+          <br><br>
+
+          <input
+            value="${task.name}"
+            id="taskname_${dayId}_${index}"
+          >
+
+          <input
+            type="color"
+            value="${task.color}"
+            id="taskcolor_${dayId}_${index}"
+          >
+
+          <br><br>
+
+      `;
+
+      Object.entries(task.slots).forEach(([time, count]) => {
+
+        html += `
+
+          <div class="slotRow">
+
+            ${time}
+
+            <input
+              type="number"
+              min="0"
+              value="${count}"
+              id="slot_${dayId}_${index}_${safeId(time)}"
+            >
+
+          </div>
+
+        `;
+
+      });
+
+      html += `
+
+          <br>
+
+          <button onclick="updateTask('${day}', ${index})">
+            Speichern
+          </button>
+
+          <button onclick="deleteTask('${day}', ${index})">
+            Löschen
+          </button>
+
+        </div>
+
+      `;
+
+    });
+
+    html += `
+
+      </div>
+
+      <hr>
+
+      <input
+        placeholder="Neue Station"
+        id="taskname_new_${dayId}"
+      >
+
+      <input
+        type="color"
+        id="taskcolor_new_${dayId}"
+      >
+
+      <button onclick="addTaskToDay('${day}')">
+        Station hinzufügen
+      </button>
+
+    `;
+
+    div.innerHTML = html;
+
+    dayList.appendChild(div);
+
+  });
+
+}
+
+function renderPlan() {
+
+  const container =
+    document.getElementById("planContainer");
+
+  container.innerHTML = "";
+
+  Object.entries(settings.days).forEach(([day, info]) => {
+
+    const h2 = document.createElement("h2");
+
+    h2.textContent = `${day} (${info.date})`;
+
+    container.appendChild(h2);
+
+    const table = document.createElement("table");
+
+    const thead = document.createElement("thead");
+
+    const hr = document.createElement("tr");
+
+    const thTime = document.createElement("th");
+
+    thTime.textContent = "Uhrzeit";
+
+    hr.appendChild(thTime);
+
+    info.tasks.forEach(task => {
+
+      const th = document.createElement("th");
+
+      th.textContent = task.name;
+
+      hr.appendChild(th);
+
+    });
+
+    thead.appendChild(hr);
+
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+
+    info.times.forEach(time => {
+
+      const tr = document.createElement("tr");
+
+      const tdTime = document.createElement("td");
+
+      tdTime.textContent = time;
+
+      tr.appendChild(tdTime);
+
+      info.tasks.forEach(task => {
+
+        const td = document.createElement("td");
+
+        const count = task.slots[time] || 0;
+
+        for (let i = 0; i < count; i++) {
+
+          const key =
+            `${day}_${time}_${task.name}_${i}`;
+
+          const input =
+            document.createElement("input");
+
+          input.className = "planInput";
+
+          input.style.background = task.color;
+
+          db.ref("plan/" + key).on("value", snap => {
+
+            const val = snap.val();
+
+            if (val) {
+
+              input.value = val;
+
+              input.disabled = !editMode;
+
+            } else {
+
+              input.value = "";
+
+              input.disabled = false;
+
+            }
+
+          });
+
+          input.addEventListener("change", () => {
+
+            db.ref("plan/" + key).set(input.value);
+
+          });
+
+          td.appendChild(input);
+
+          td.appendChild(document.createElement("br"));
+
+        }
+
+        tr.appendChild(td);
+
+      });
+
+      tbody.appendChild(tr);
+
+    });
+
+    table.appendChild(tbody);
+
+    container.appendChild(table);
+
+  });
+
+}
+
+function resetPlan() {
+
+  if (confirm("Wirklich alles löschen?")) {
+
+    db.ref("plan").remove();
+
+  }
+
+}
+
+db.ref("config").on("value", snap => {
+
+  const data = snap.val();
+
+  if (!data) return;
+
+  document.getElementById("title").textContent =
+    data.orgName || "Schichtplan";
+
+  document.getElementById("subtitle").textContent =
+    data.details || "";
+
+  document.getElementById("orgName").value =
+    data.orgName || "";
+
+  document.getElementById("eventDetails").value =
+    data.details || "";
+
+});
+
+db.ref("settings").on("value", snap => {
+
+  const data = snap.val();
+
+  settings = {
+    days: {}
+  };
+
+  if (!data || typeof data !== "object") {
+
+    renderAdminLists();
+    renderPlan();
+
+    return;
+  }
+
+  if (!data.days || typeof data.days !== "object") {
+
+    renderAdminLists();
+    renderPlan();
+
+    return;
+  }
+
+  Object.entries(data.days).forEach(([day, info]) => {
+
+    settings.days[day] = {
+
+      date: info.date || "",
+
+      times: Array.isArray(info.times)
+        ? info.times
+        : [],
+
+      tasks: Array.isArray(info.tasks)
+        ? info.tasks
+        : []
+
+    };
+
+    settings.days[day].tasks =
+      settings.days[day].tasks.map(task => {
+
+        const safeTask = {
+
+          name: task.name || "Station",
+
+          color: task.color || "#cccccc",
+
+          slots: {}
+
+        };
+
+        settings.days[day].times.forEach(time => {
+
+          if (
+            task.slots &&
+            typeof task.slots[time] !== "undefined"
+          ) {
+
+            safeTask.slots[time] =
+              parseInt(task.slots[time]) || 0;
+
+          } else {
+
+            safeTask.slots[time] = 1;
+
+          }
+
+        });
+
+        return safeTask;
+
+      });
+
+  });
+
+  renderAdminLists();
+
+  renderPlan();
+
+});
+
+</script>
+
+</body>
+</html>
